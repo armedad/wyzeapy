@@ -90,6 +90,7 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
                         "bmi": 24.1,
                         "body_fat": 18.5,
                         "muscle": 59.0,
+                        "body_vfr": "10",
                         "body_water": -1,
                         "heart_rate": None,
                     }
@@ -108,6 +109,7 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(updated.latest_record.bmi, 24.1)
         self.assertEqual(updated.latest_record.body_fat, 18.5)
         self.assertEqual(updated.latest_record.muscle, 59.0)
+        self.assertEqual(updated.latest_record.body_vfr, 10.0)
         self.assertIsNone(updated.latest_record.body_water)
         self.assertEqual(
             self.scale_service._olive_get.await_args_list[0].args[0],
@@ -181,6 +183,7 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
                 "weight": 70.0,
                 "body_fat": -1,
                 "muscle": -1.0,
+                "body_vfr": -1,
                 "bmi": 22.5,
             }
         )
@@ -188,6 +191,7 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(record.bmi, 22.5)
         self.assertIsNone(record.body_fat)
         self.assertIsNone(record.muscle)
+        self.assertIsNone(record.body_vfr)
 
 
 if __name__ == "__main__":

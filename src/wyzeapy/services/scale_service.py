@@ -63,6 +63,8 @@ class ScaleRecord:
         self.body_water: float | None = _parse_float(data.get("body_water"))
         self.bone_mineral: float | None = _parse_float(data.get("bone_mineral"))
         self.protein: float | None = _parse_float(data.get("protein"))
+        # Visceral fat rating (dimensionless index)
+        self.body_vfr: float | None = _parse_float(data.get("body_vfr"))
         self.bmr: float | None = _parse_float(data.get("bmr"))
         self.heart_rate: int | None = _parse_int(data.get("heart_rate"))
         self.metabolic_age: int | None = _parse_int(data.get("metabolic_age"))

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 from wyzeapy.services.scale_service import (
     SCALE_MODELS,
     Scale,
+    ScaleFamilyMember,
     ScaleRecord,
     ScaleService,
 )
@@ -84,6 +85,17 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
             {
                 "data": [
                     {
+                        "data_id": "member-rec1",
+                        "measure_ts": 1700000000000,
+                        "measure_type": 1,
+                        "family_member_id": "member1",
+                        "weight": 21.5,
+                    }
+                ]
+            },
+            {
+                "data": [
+                    {
                         "data_id": "rec1",
                         "measure_ts": 1700000000000,
                         "weight": 80.5,
@@ -103,6 +115,12 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(updated.available)
         self.assertEqual(len(updated.family_members), 1)
         self.assertEqual(updated.family_members[0].nickname, "Chee")
+        member_record = updated.family_members[0].latest_record
+        self.assertIsNotNone(member_record)
+        assert member_record is not None
+        self.assertEqual(member_record.weight_kg, 21.5)
+        self.assertEqual(member_record.measure_type, 1)
+        self.assertEqual(member_record.family_member_id, "member1")
         self.assertIsNotNone(updated.latest_record)
         assert updated.latest_record is not None
         self.assertEqual(updated.latest_record.weight_kg, 80.5)
@@ -117,6 +135,14 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(
             self.scale_service._olive_get.await_args_list[1].args[0],
+            "https://wyze-scale-service.wyzecam.com/plugin/scale/get_latest_record",
+        )
+        self.assertEqual(
+            self.scale_service._olive_get.await_args_list[1].kwargs["family_member_id"],
+            "member1",
+        )
+        self.assertEqual(
+            self.scale_service._olive_get.await_args_list[2].args[0],
             "https://wyze-scale-service.wyzecam.com/plugin/scale/get_latest_record",
         )
 
@@ -192,6 +218,43 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(record.body_fat)
         self.assertIsNone(record.muscle)
         self.assertIsNone(record.body_vfr)
+
+    def test_family_member_preserves_profile_metadata(self):
+        member = ScaleFamilyMember(
+            {
+                "family_member_id": "pet1",
+                "nickname": "Pet Profile",
+                "user_type": 3,
+                "member_type": "pet",
+                "body_type": 2,
+                "gender": 1,
+                "birthDate": "2020-01-01",
+                "breed": "Shiba Inu",
+                "future_field": "preserved",
+            }
+        )
+
+        self.assertEqual(member.id, "pet1")
+        self.assertEqual(member.nickname, "Pet Profile")
+        self.assertEqual(member.user_type, 3)
+        self.assertEqual(member.member_type, "pet")
+        self.assertEqual(member.birth_date, "2020-01-01")
+        self.assertEqual(member.breed, "Shiba Inu")
+        self.assertEqual(member.raw_dict["future_field"], "preserved")
+
+    async def test_member_failure_does_not_make_scale_unavailable(self):
+        self.scale_service._olive_get.side_effect = [
+            {"data": [{"id": "pet1", "nickname": "Pet Profile"}]},
+            RuntimeError("member record unavailable"),
+            {"data": [{"weight": 80.0, "measure_ts": 100}]},
+        ]
+
+        updated = await self.scale_service.update(self.test_scale)
+
+        self.assertTrue(updated.available)
+        self.assertFalse(updated.family_members[0].available)
+        self.assertIsNone(updated.family_members[0].latest_record)
+        self.assertEqual(updated.latest_record.weight_kg, 80.0)
 
 
 if __name__ == "__main__":

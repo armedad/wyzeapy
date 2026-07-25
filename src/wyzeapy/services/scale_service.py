@@ -55,6 +55,7 @@ class ScaleRecord:
             str(data["data_id"]) if data.get("data_id") is not None else None
         )
         self.measure_ts: int | None = _parse_int(data.get("measure_ts"))
+        self.measure_type: int | None = _parse_int(data.get("measure_type"))
         # API stores weight in kilograms
         self.weight_kg: float | None = _parse_float(data.get("weight"))
         self.bmi: float | None = _parse_float(data.get("bmi"))
@@ -81,11 +82,26 @@ class ScaleFamilyMember:
     """A user profile associated with a Wyze scale."""
 
     def __init__(self, dictionary: Dict[Any, Any]) -> None:
-        member_id = dictionary.get("id") or dictionary.get("family_member_id")
+        self.raw_dict = dictionary
+        member_id = dictionary.get("id")
+        if member_id is None:
+            member_id = dictionary.get("family_member_id")
         self.id: str = str(member_id) if member_id is not None else ""
         self.nickname: str = str(dictionary.get("nickname") or "Unknown")
         self.height: float | None = _parse_float(dictionary.get("height"))
         self.goal_weight: float | None = _parse_float(dictionary.get("goal_weight"))
+        # Wyze has not published a schema for baby and pet profiles. Preserve
+        # the known discriminator candidates without assigning enum meanings.
+        self.user_type: Any = dictionary.get("user_type")
+        self.member_type: Any = dictionary.get("member_type")
+        self.body_type: Any = dictionary.get("body_type")
+        self.gender: Any = dictionary.get("gender")
+        self.birth_date: Any = dictionary.get("birth_date") or dictionary.get(
+            "birthDate"
+        )
+        self.breed: Any = dictionary.get("breed")
+        self.latest_record: ScaleRecord | None = None
+        self.available: bool = True
 
 
 class Scale(Device):
@@ -121,19 +137,33 @@ class ScaleService(BaseService):
         scales = [
             device
             for device in self._devices
-            if device.type is DeviceTypes.SCALE
-            or device.product_model in SCALE_MODELS
+            if device.type is DeviceTypes.SCALE or device.product_model in SCALE_MODELS
         ]
         return [Scale(scale.raw_dict) for scale in scales]
 
     async def update(self, scale: Scale) -> Scale:
-        """Refresh family members and the latest measurement for a scale."""
+        """Refresh family members and latest measurements for a scale."""
         try:
             scale.family_members = await self.get_family_members(scale)
         except Exception:
             _LOGGER.debug(
                 "Unable to fetch family members for %s", scale.nickname, exc_info=True
             )
+
+        for member in scale.family_members:
+            if not member.id:
+                continue
+            try:
+                member.latest_record = await self.get_latest_record(scale, member.id)
+                member.available = True
+            except Exception:
+                member.available = False
+                _LOGGER.debug(
+                    "Unable to fetch latest record for scale member %s on %s",
+                    member.nickname,
+                    scale.nickname,
+                    exc_info=True,
+                )
 
         try:
             scale.latest_record = await self.get_latest_record(scale)
@@ -160,7 +190,9 @@ class ScaleService(BaseService):
             data = data.get("family_member_list") or data.get("list") or []
         if not isinstance(data, list):
             return []
-        return [ScaleFamilyMember(member) for member in data if isinstance(member, dict)]
+        return [
+            ScaleFamilyMember(member) for member in data if isinstance(member, dict)
+        ]
 
     async def get_latest_record(
         self, scale: Scale, family_member_id: str | None = None

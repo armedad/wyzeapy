@@ -119,6 +119,10 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
             self.scale_service._olive_get.await_args_list[1].args[0],
             "https://wyze-scale-service.wyzecam.com/plugin/scale/get_latest_record",
         )
+        self.assertEqual(
+            self.scale_service._olive_get.await_args_list[1].kwargs["device_id"],
+            "JA.SC.ABCDEF123456",
+        )
 
     async def test_update_uses_pluto_urls(self):
         pluto_scale = Scale(
@@ -147,10 +151,7 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_update_empty_latest_record(self):
-        self.scale_service._olive_get.side_effect = [
-            {"data": []},
-            {"data": []},
-        ]
+        self.scale_service._olive_get.return_value = {"data": []}
 
         updated = await self.scale_service.update(self.test_scale)
 
@@ -174,8 +175,129 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(records), 2)
         self.assertEqual(records[0].weight_kg, 80.0)
         call_kwargs = self.scale_service._olive_get.await_args.kwargs
+        self.assertEqual(call_kwargs["device_id"], "JA.SC.ABCDEF123456")
         self.assertIn("start_time", call_kwargs)
         self.assertIn("end_time", call_kwargs)
+
+    async def test_get_latest_record_ignores_other_scale_mac(self):
+        self.scale_service._olive_get.side_effect = [
+            {"data": [{"weight": 80.0, "measure_ts": 100, "mac": "WL_SCU.OTHER"}]},
+            {
+                "data": [
+                    {"weight": 80.0, "measure_ts": 100, "mac": "WL_SCU.OTHER"},
+                    {"weight": 70.0, "measure_ts": 90, "mac": "JA.SC.ABCDEF123456"},
+                ]
+            },
+        ]
+
+        record = await self.scale_service.get_latest_record(self.test_scale)
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record.weight_kg, 70.0)
+        self.assertEqual(self.scale_service._olive_get.await_count, 2)
+
+    def test_record_prefers_device_id_for_matching(self):
+        record = ScaleRecord(
+            {
+                "mac": "80:48:2c:95:5c:53",
+                "device_id": "WL_SCU_80482C955C53",
+                "weight": 77.9,
+            }
+        )
+        scale = Scale(
+            {
+                "product_type": DeviceTypes.SCALE.value,
+                "product_model": "JA.SC",
+                "mac": "JA.SC.2CAA8E429AE3",
+                "nickname": "Classic",
+                "device_params": {},
+            }
+        )
+        self.assertFalse(ScaleService._record_matches_scale(scale, record))
+        self.assertTrue(
+            ScaleService._mac_matches("JA.SC.ABCDEF123456", "ABCDEF123456")
+        )
+        self.assertTrue(
+            ScaleService._mac_matches(
+                "WL_SCU_80482C955C53", "WL_SCU.80482C955C53"
+            )
+        )
+        self.assertFalse(
+            ScaleService._mac_matches("JA.SC.ABCDEF123456", "OTHER123456")
+        )
+
+    async def test_get_latest_record_legacy_payload_without_mac(self):
+        self.scale_service._olive_get.side_effect = [
+            {"data": []},
+            {"data": {"weight": 80.0, "measure_ts": 100}},
+        ]
+
+        record = await self.scale_service.get_latest_record(self.test_scale)
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record.weight_kg, 80.0)
+
+    async def test_get_latest_record_uses_record_range_when_mac_mismatch(self):
+        self.scale_service._olive_get.side_effect = [
+            {
+                "data": [
+                    {
+                        "weight": 90.0,
+                        "measure_ts": 200,
+                        "mac": "80:48:2c:95:5c:53",
+                        "device_id": "WL_SCU_80482C955C53",
+                    }
+                ]
+            },
+            {
+                "data": [
+                    {
+                        "weight": 90.0,
+                        "measure_ts": 200,
+                        "mac": "80:48:2c:95:5c:53",
+                        "device_id": "WL_SCU_80482C955C53",
+                    }
+                ]
+            },
+            {"data": []},
+            {"data": []},
+            {"data": []},
+            {"data": []},
+            {"data": []},
+            {"data": []},
+            {
+                "data": [
+                    {
+                        "weight": 70.0,
+                        "measure_ts": 1676942223004,
+                        "mac": "ABCDEF123456",
+                    }
+                ]
+            },
+        ]
+
+        record = await self.scale_service.get_latest_record(self.test_scale)
+
+        self.assertIsNotNone(record)
+        self.assertEqual(record.weight_kg, 70.0)
+        self.assertEqual(self.scale_service._olive_get.await_count, 9)
+
+    async def test_get_records_filters_other_scale_mac(self):
+        self.scale_service._olive_get.return_value = {
+            "data": [
+                {"weight": 80.0, "measure_ts": 100, "mac": "JA.SC.ABCDEF123456"},
+                {"weight": 90.0, "measure_ts": 200, "mac": "WL_SCU.OTHER_SCALE"},
+            ]
+        }
+
+        records = await self.scale_service.get_records(
+            self.test_scale,
+            start_time=datetime(2024, 1, 1),
+            end_time=datetime(2024, 1, 31),
+        )
+
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0].weight_kg, 80.0)
 
     def test_scale_record_sentinel_values(self):
         record = ScaleRecord(
@@ -185,6 +307,8 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
                 "muscle": -1.0,
                 "body_vfr": -1,
                 "bmi": 22.5,
+                "heart_rate": -1,
+                "metabolic_age": -1,
             }
         )
         self.assertEqual(record.weight_kg, 70.0)
@@ -192,6 +316,8 @@ class TestScaleService(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(record.body_fat)
         self.assertIsNone(record.muscle)
         self.assertIsNone(record.body_vfr)
+        self.assertIsNone(record.heart_rate)
+        self.assertIsNone(record.metabolic_age)
 
 
 if __name__ == "__main__":
